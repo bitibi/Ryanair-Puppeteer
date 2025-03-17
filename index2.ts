@@ -1,4 +1,4 @@
-import puppeteer, { Page } from 'puppeteer';
+import puppeteer, { EvaluateFunc, Page } from 'puppeteer';
 
 // Add waitForTimeout to the Page interface
 declare module 'puppeteer' {
@@ -11,6 +11,7 @@ interface DatePrice {
   date: string;
   weekday: string;
   price: string;
+  currency: string;
   isSelected: boolean;
 }
 
@@ -100,7 +101,7 @@ async function checkRyanairPrice(
         const isSelected = item.classList.contains('date-item--selected');
         
         // Extract full date information - day number + month
-        const dayElement = item.querySelector('.date-item__day');
+        const dayElement = item.querySelector('.date-item__day-of-month');
         const day = dayElement ? dayElement.textContent?.trim() || '' : '';
         
         // Extract month
@@ -111,17 +112,22 @@ async function checkRyanairPrice(
         const date = `${day} ${month}`;
         
         // Extract weekday
-        const weekdayElement = item.querySelector('.date-item__week-day');
+        const weekdayElement = item.querySelector('.date-item__day-of-week');
         const weekday = weekdayElement ? weekdayElement.textContent?.trim() || '' : '';
         
-        // Extract price
+        // Extract price and currency
         const priceElement = item.querySelector('.date-item__price');
-        const price = priceElement ? priceElement.textContent?.trim() || 'N/A' : 'N/A';
+        const priceText = priceElement ? priceElement.textContent?.trim() || 'N/A' : 'N/A';
+        const priceMatch = priceText.match(/[\d,.]+/);
+        const currencyMatch = priceText.match(/[^\d\s,.]+/);
+        const price = priceMatch ? priceMatch[0] : 'N/A';
+        const currency = currencyMatch ? currencyMatch[0] : 'N/A';
         
         return {
           date,
           weekday,
           price,
+          currency,
           isSelected
         };
       });
@@ -134,19 +140,24 @@ async function checkRyanairPrice(
       const timeSlots = Array.from(document.querySelectorAll('.flight-header__min-price, .flight-info, .journey-info'));
       return timeSlots.map(slot => {
         // Try to get departure/arrival times
-        const times = slot.querySelectorAll('.time, .hour');
+        const times = slot.querySelectorAll('.flight-info__hour');
         const departureTime = times[0]?.textContent?.trim() || 'N/A';
         const arrivalTime = times[1]?.textContent?.trim() || 'N/A';
+
+        // Try to get departure/arrival cities
+        const cities = slot.querySelectorAll('.flight-info__city');
+        const fromCity = cities[0]?.textContent?.trim() || 'N/A';
+        const toCity = cities[1]?.textContent?.trim() || 'N/A';
         
         // Try to get price
         const priceElement = slot.querySelector('.price, .amount, .fare');
         const price = priceElement ? priceElement.textContent?.trim() : 'N/A';
         
         // Try to get flight number
-        const flightElement = slot.querySelector('.flight-number, .flight-code, .flight');
+        const flightElement = slot.querySelector('.card-flight-num__content');
         const flightNumber = flightElement ? flightElement.textContent?.trim() : 'N/A';
         
-        return { departureTime, arrivalTime, price, flightNumber };
+        return { departureTime, arrivalTime, price, flightNumber, fromCity, toCity };
       });
     });
     
@@ -157,17 +168,17 @@ async function checkRyanairPrice(
     
     // Extract available flights for the selected date
     console.log('Extracting flight details...');
-    let flights: FlightData[] = await page.evaluate(() => {
+    let flights: FlightData[] = await page.evaluate(((destination: string, origin: string) => {
       // Try different selectors for flight cards
       const flightCards = Array.from(document.querySelectorAll('[data-e2e="flight-card"], .flight-card, .card-flight'));
       
       return flightCards.map(card => {
         // Extract times - try multiple selector patterns
-        const departureTime = card.querySelector('[data-e2e="flight-card-departure-time"], .flight-card__departure-time, .card-flight__departure, .hour')?.textContent?.trim() || 'N/A';
-        const arrivalTime = card.querySelector('[data-e2e="flight-card-arrival-time"], .flight-card__arrival-time, .card-flight__arrival, .hour:nth-child(2)')?.textContent?.trim() || 'N/A';
+        const departureTime = card.querySelector('[data-ref="flight-segment.departure"] .flight-info__hour')?.textContent?.trim() || 'N/A';
+        const arrivalTime = card.querySelector('[data-ref="flight-segment.arrival"] .flight-info__hour')?.textContent?.trim() || 'N/A';
         
         // Extract flight number
-        const flightNumber = card.querySelector('[data-e2e="flight-card-flight-number"], .flight-card__flight-number, .card-flight__number, .info')?.textContent?.trim() || 'N/A';
+        const flightNumber = card.querySelector('.card-flight-num__content')?.textContent?.trim() || 'N/A';
         
         // Extract price
         const priceElement = card.querySelector('[data-e2e="flight-card-price"], .flight-card__price, .card-flight__price, .price');
@@ -181,11 +192,7 @@ async function checkRyanairPrice(
         const currency = currencyMatch ? currencyMatch[0] : '';
         
         // Extract duration if available
-        const duration = card.querySelector('[data-e2e="flight-card-duration"], .flight-card__duration, .card-flight__duration, .flight-time')?.textContent?.trim() || 'N/A';
-        
-        // Try to extract from/to airports
-        const fromAirport = card.querySelector('.airport-code:first-child, .card-flight__departure-airport')?.textContent?.trim() || 'N/A';
-        const toAirport = card.querySelector('.airport-code:last-child, .card-flight__arrival-airport')?.textContent?.trim() || 'N/A';
+        const duration = card.querySelector('[data-ref="flight_duration"], .flight-card__duration, .card-flight__duration, .flight-time')?.textContent?.trim() || 'N/A';
         
         return {
           flightNumber,
@@ -194,11 +201,11 @@ async function checkRyanairPrice(
           price,
           currency,
           duration,
-          fromAirport,
-          toAirport
+          fromAirport: origin,
+          toAirport: destination
         };
       });
-    });
+    }) as EvaluateFunc<[string, string]>, destination, origin) as FlightData[];
     
     // Try a different approach if we still don't have flight info
     if (flights.length === 0) {
@@ -373,8 +380,8 @@ async function main() {
     const origin = process.argv[2] || 'BUD';         // Budapest
     const destination = process.argv[3] || 'MAN';    // Manchester
     const date = process.argv[4] || '2025-08-22';    // Date format: YYYY-MM-DD
-    const adults = parseInt(process.argv[5] || '1'); // Number of adults
-    const teens = parseInt(process.argv[6] || '0');  // Number of teens
+    const adults = parseInt(process.argv[5] || '2'); // Number of adults
+    const teens = parseInt(process.argv[6] || '2');  // Number of teens
     const children = parseInt(process.argv[7] || '0'); // Number of children
     const infants = parseInt(process.argv[8] || '0'); // Number of infants
     

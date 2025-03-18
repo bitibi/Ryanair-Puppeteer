@@ -414,15 +414,11 @@ async function main() {
       console.log(`Route: ${cheapestFlight.fromAirport} to ${cheapestFlight.toAirport}`);
       console.log(`Departure: ${cheapestFlight.departureTime}, Arrival: ${cheapestFlight.arrivalTime}`);
       console.log(`Duration: ${cheapestFlight.duration}`);
-
-      return flightData.datePrices;
     } else {
       console.log('No flights found for this date.');
-      return [];
     }
   } catch (error) {
     console.error('Error in main function:', error);
-    return [];
   }
 }
 

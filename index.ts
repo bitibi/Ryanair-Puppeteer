@@ -1,4 +1,9 @@
 import puppeteer, { EvaluateFunc, Page } from 'puppeteer';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = 'https://wtywaiqrvdnlhsfharbg.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Add waitForTimeout to the Page interface
 declare module 'puppeteer' {
@@ -395,6 +400,36 @@ async function main() {
     console.log('\nPrices for nearby dates:');
     console.table(flightData.datePrices);
     
+    // Convert date to Postgres-friendly format
+    const convertToPostgresDate = (dateString: string): string => {
+      const [day, month] = dateString.split(' ');
+      const monthMap: { [key: string]: string } = {
+        Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+        Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+      };
+      const monthNumber = monthMap[month as keyof typeof monthMap];
+      const year = new Date().getFullYear();
+      return `${year}-${monthNumber}-${day.padStart(2, '0')}`;
+    };
+
+    // Insert datePrices into Supabase
+    for (const datePrice of flightData.datePrices) {
+      const postgresDate = convertToPostgresDate(datePrice.date);
+      const { error } = await supabase.from('FlightPrices').insert({
+        date: postgresDate,
+        weekday: datePrice.weekday,
+        price: parseFloat(datePrice.price.replace(/,/g, '')),
+        currency: datePrice.currency,
+        exactDate: datePrice.isSelected
+      });
+
+      if (error) {
+        console.error('Error inserting datePrice:', error);
+      } else {
+        console.log('Inserted datePrice:', datePrice);
+      }
+    }
+
     // Find the cheapest flight
     if (flightData.flights.length > 0) {
       const cheapestFlight = flightData.flights.reduce((min: FlightData, flight: FlightData) => {

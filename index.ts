@@ -78,7 +78,7 @@ async function checkRyanairPrice(
 
     // Navigate directly to the flight selection page
     console.log(`Navigating to flight selection page for ${origin} to ${destination} on ${date}...`);
-    await page.goto(directUrl, { waitUntil: 'networkidle2' });
+    await page.goto(directUrl, { waitUntil: 'networkidle2', timeout: 0 });
 
     // Accept cookies if the dialog appears
     try {

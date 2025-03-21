@@ -420,7 +420,9 @@ async function main() {
         weekday: datePrice.weekday,
         price: parseFloat(datePrice.price.replace(/,/g, '')),
         currency: datePrice.currency,
-        exactDate: datePrice.isSelected
+        exactDate: datePrice.isSelected,
+        origin: origin,
+        destination: destination
       });
 
       if (error) {

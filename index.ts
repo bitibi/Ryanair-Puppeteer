@@ -1,5 +1,10 @@
 import puppeteer, { EvaluateFunc, Page } from 'puppeteer';
 import { createClient } from '@supabase/supabase-js';
+import { Resend } from 'resend';
+
+console.log(process.env.RESEND_KEY);
+
+const resend = new Resend(process.env.RESEND_KEY);
 
 const supabaseUrl = 'https://wtywaiqrvdnlhsfharbg.supabase.co';
 const supabaseKey = process.env.SUPABASE_KEY || '';
@@ -380,6 +385,7 @@ async function checkRyanairPrice(
 
 // Example usage with command line arguments
 async function main() {
+
   try {
     // Use command line arguments or default values
     const origin = process.argv[2] || 'BUD';         // Budapest
@@ -400,17 +406,7 @@ async function main() {
     console.log('\nPrices for nearby dates:');
     console.table(flightData.datePrices);
     
-    // Convert date to Postgres-friendly format
-    const convertToPostgresDate = (dateString: string): string => {
-      const [day, month] = dateString.split(' ');
-      const monthMap: { [key: string]: string } = {
-        Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
-        Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12'
-      };
-      const monthNumber = monthMap[month as keyof typeof monthMap];
-      const year = new Date().getFullYear();
-      return `${year}-${monthNumber}-${day.padStart(2, '0')}`;
-    };
+    await checkAndLogPriceWarnings(flightData.datePrices, origin, destination);
 
     // Insert datePrices into Supabase
     for (const datePrice of flightData.datePrices) {
@@ -431,32 +427,6 @@ async function main() {
         console.log('Inserted datePrice:', datePrice);
       }
     }
-
-    // Find the cheapest flight
-    if (flightData.flights.length > 0) {
-      const cheapestFlight = flightData.flights.reduce((min: FlightData, flight: FlightData) => {
-        // Extract numeric value from price string
-        const getPriceNumeric = (price: string) => {
-          const matches = price.match(/[\d,.]+/);
-          return matches ? parseFloat(matches[0].replace(/,/g, '')) : Infinity;
-        };
-        
-        const priceA = getPriceNumeric(min.price);
-        const priceB = getPriceNumeric(flight.price);
-        return priceA < priceB ? min : flight;
-      });
-      
-      console.log(`\nCheapest flight: ${cheapestFlight.flightNumber}`);
-      console.log(`Price: ${cheapestFlight.price}`);
-      console.log(`Route: ${cheapestFlight.fromAirport} to ${cheapestFlight.toAirport}`);
-      console.log(`Departure: ${cheapestFlight.departureTime}, Arrival: ${cheapestFlight.arrivalTime}`);
-      console.log(`Duration: ${cheapestFlight.duration}`);
-
-      return flightData.datePrices;
-    } else {
-      console.log('No flights found for this date.');
-      return [];
-    }
   } catch (error) {
     console.error('Error in main function:', error);
     return [];
@@ -465,3 +435,75 @@ async function main() {
 
 // Run the script
 main().catch(console.error);
+
+// Convert date to Postgres-friendly format
+const convertToPostgresDate = (dateString: string): string => {
+  const [day, month] = dateString.split(' ');
+  const monthMap: { [key: string]: string } = {
+    Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+    Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+  };
+  const monthNumber = monthMap[month as keyof typeof monthMap];
+  const year = new Date().getFullYear();
+  return `${year}-${monthNumber}-${day.padStart(2, '0')}`;
+};
+
+async function checkAndLogPriceWarnings(datePrices: DatePrice[], origin: string, destination: string) {
+  for (const datePrice of datePrices) {
+    const postgresDate = convertToPostgresDate(datePrice.date);
+
+    // Fetch the most recent price for the given date from the database
+    const { data: recentPrices, error } = await supabase
+      .from('FlightPrices')
+      .select('price')
+      .eq('date', postgresDate)
+      .eq('origin', origin)
+      .eq('destination', destination)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('Error fetching recent prices:', error);
+      continue;
+    } else {
+      console.log('Fetched recent prices:', recentPrices);
+    }
+
+    if (recentPrices && recentPrices.length > 0) {
+      const recentPrice = recentPrices[0].price;
+      const currentPrice = parseFloat(datePrice.price.replace(/,/g, ''));
+
+      if (currentPrice < recentPrice) {
+        sendPriceDropEmail(
+          `Price drop detected for ${datePrice.date} (${origin} -> ${destination})`,
+          `Previous price: ${recentPrice}, Current price: ${currentPrice}`
+        );
+
+        console.warn(
+          `Price drop detected for ${datePrice.date} (${origin} -> ${destination}): ` +
+          `Previous: ${recentPrice}, Current: ${currentPrice}`
+        );
+      } else {
+        console.log(
+          `No price drop for ${datePrice.date} (${origin} -> ${destination}): ` +
+          `Previous: ${recentPrice}, Current: ${currentPrice}`
+        );
+      }
+    }
+  }
+}
+
+async function sendPriceDropEmail(subject: string, text: string) {
+  try {
+    // Send the email
+    const response = await resend.emails.send({
+      from: 'onboarding@resend.dev',
+      to: 'bicskeit@gmail.com',
+      subject: subject,
+      text: text
+    });
+    console.log('Email sent:', response.data);
+  } catch (error) {
+    console.error('Error sending email:', error);
+  }
+}
